@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="WebServers">
+    <option name="servers">
+      <webServer id="8f6c69cb-219d-4319-920f-cbeb235789c0" name="inception" url="http://203.246.112.79">
+        <fileTransfer host="203.246.112.79" port="22" rootFolder="/home/nlp-gpu/Desktop/Hwang_algolab" accessType="SFTP">
+          <advancedOptions>
+            <advancedOptions dataProtectionLevel="Private" />
+          </advancedOptions>
+          <option name="port" value="22" />
+        </fileTransfer>
+      </webServer>
+    </option>
+  </component>
+</project>
