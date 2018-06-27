@@ -11,76 +11,65 @@ import os
 import tensorflow as tf
 import pickle
 import numpy as np
-import random
+from random import shuffle
 
 
 class Inception(object):
     def __init__(self):
         self.current_dir = os.getcwd()
-        self.epoch = 2000
+        self.epoch = 1500
         self.dataPath = os.path.join(self.current_dir, 'data', 'pklData')
 
+        self.dropout_rate = tf.placeholder(dtype=tf.float32)
         self.input1 = tf.placeholder(dtype=tf.float32, shape=[None, 26, 5])
         self.input2 = tf.placeholder(dtype=tf.float32, shape=[None, 26, 4])
         self.input3 = tf.placeholder(dtype=tf.float32, shape=[None, 26, 4])
         self.input4 = tf.placeholder(dtype=tf.float32, shape=[None, 26, 4])
         self.input5 = tf.placeholder(dtype=tf.float32, shape=[None, 26, 4])
         self.input6 = tf.placeholder(dtype=tf.float32, shape=[None, 26, 4])
-        self.target = tf.placeholder(dtype=tf.float32, shape=[None, 4])
+        self.target = tf.placeholder(dtype=tf.float32, shape=[None, 2])
 
         self.isTraining = True
 
-        self.learningRate = 0.0002
-        self.best = 0.0
-        self.direction_best = 0.0
+        self.learningRate = 0.001
         self.past = 0.0
         self.cnt = 0
 
-        self.br = 0.0
-        self.ed = 0.0
-        self.eu = 0.0
-        self.bl = 0.0
+        self.best = 0.0
+        self.training_best = 0.0
+        self.test_best = 0.0
+        self.direction_best = 0.0
+
+        self.results = [0.0 for _ in range(4)]
 
         self.model()
-        self.costCheck()
-        self.optimizer()
-        self.accuracy()
+
+        self.sess = None
 
         tf.set_random_seed(777)  # reproducibility
         print('isOK')
 
-    def lstmCell(self):
-        return tf.contrib.rnn.BasicLSTMCell(num_units=78, activation=tf.tanh)
+    def stem(self, data, size):
+        data = tf.reshape(data, [-1, 26, size, 1])
 
-    def blstm(self, data):
-        output, _, _ = tf.contrib.rnn.stack_bidirectional_dynamic_rnn([self.lstmCell() for _ in range(15)],
-                                                                      [self.lstmCell() for _ in range(15)],
-                                                                      data, dtype=tf.float32)
-        return output
-
-    def stem(self, data, final_padding='valid'):
-        # step1
         stem_conv1 = tf.layers.conv2d(inputs=data, filters=5, kernel_size=[3, 3], padding="SAME", activation=tf.nn.relu)
-        stem_conv2 = tf.layers.conv2d(inputs=stem_conv1, filters=5, kernel_size=[3, 3], padding="SAME", activation=tf.nn.relu)
+        stem_dropout1 = tf.nn.dropout(stem_conv1, keep_prob=self.dropout_rate)
 
-        stem_conv3 = tf.layers.conv2d(inputs=stem_conv2, filters=9, kernel_size=[3, 3], padding=final_padding, strides=(2, 2),
+
+        stem_conv2 = tf.layers.conv2d(inputs=stem_dropout1, filters=5, kernel_size=[3, 3], padding="SAME", activation=tf.nn.relu)
+        stem_dropout2 = tf.nn.dropout(stem_conv2, keep_prob=self.dropout_rate)
+
+
+        stem_conv3 = tf.layers.conv2d(inputs=stem_dropout2, filters=9, kernel_size=[3, 3], padding="SAME", strides=(2, 2),
                                       activation=tf.nn.relu)
-        stem_pool3 = tf.layers.max_pooling2d(inputs=stem_conv2, pool_size=[3, 3], padding=final_padding, strides=2)
+        stem_dropout3_1 = tf.nn.dropout(stem_conv3, keep_prob=self.dropout_rate)
 
-        inter_data1 = tf.concat([stem_conv3, stem_pool3], axis=3)
+        stem_pool3 = tf.layers.max_pooling2d(inputs=stem_dropout2, pool_size=[3, 3], padding="SAME", strides=2)
+        stem_dropout3_2 = tf.nn.dropout(stem_pool3, keep_prob=self.dropout_rate)
 
-        # step2
-        stem_conv2_1_1 = tf.layers.conv2d(inputs=inter_data1, filters=10, kernel_size=[1, 1], padding="SAME", activation=tf.nn.relu)
-        stem_conv2_1_2 = tf.layers.conv2d(inputs=stem_conv2_1_1, filters=12, kernel_size=[3, 3], padding=final_padding, activation=tf.nn.relu)
-
-        stem_conv2_2_1 = tf.layers.conv2d(inputs=inter_data1, filters=10, kernel_size=[1, 1], padding="SAME", activation=tf.nn.relu)
-        stem_conv2_2_2 = tf.layers.conv2d(inputs=stem_conv2_2_1, filters=10, kernel_size=[3, 1], padding="SAME", activation=tf.nn.relu)
-        stem_conv2_2_3 = tf.layers.conv2d(inputs=stem_conv2_2_2, filters=10, kernel_size=[1, 3], padding="SAME", activation=tf.nn.relu)
-        stem_conv2_2_4 = tf.layers.conv2d(inputs=stem_conv2_2_3, filters=12, kernel_size=[3, 3], padding=final_padding, activation=tf.nn.relu)
-
-        inter_data2 = tf.concat([stem_conv2_1_2, stem_conv2_2_4], axis=3)
-
-        return tf.layers.conv2d(inputs=inter_data2, filters=10, kernel_size=[1, 1], padding="SAME", activation=tf.nn.relu)
+        inter_data = tf.concat([stem_dropout3_1, stem_dropout3_2], axis=3)
+        print(inter_data, stem_dropout3_1, stem_dropout3_2)
+        return tf.layers.conv2d(inputs=inter_data, filters=10, kernel_size=[1, 1], padding="SAME", activation=tf.nn.relu)
 
 
     def inception_a(self, data):
@@ -200,111 +189,69 @@ class Inception(object):
 
 
     def model(self):
-        # data normalize
         input1 = tf.layers.batch_normalization(self.input1, training=self.isTraining)
         input2 = tf.layers.batch_normalization(self.input2, training=self.isTraining)
         input3 = tf.layers.batch_normalization(self.input3, training=self.isTraining)
         input4 = tf.layers.batch_normalization(self.input4, training=self.isTraining)
         input5 = tf.layers.batch_normalization(self.input5, training=self.isTraining)
         input6 = tf.layers.batch_normalization(self.input6, training=self.isTraining)
-
-        #####################################################################################
-        # blstm
-        with tf.variable_scope('blstm1'):
-            data1 = self.blstm(input1)
-        with tf.variable_scope('blstm2'):
-            data2 = self.blstm(input2)
-        with tf.variable_scope('blstm3'):
-            data3 = self.blstm(input3)
-        with tf.variable_scope('blstm4'):
-            data4 = self.blstm(input4)
-        with tf.variable_scope('blstm5'):
-            data5 = self.blstm(input5)
-        with tf.variable_scope('blstm6'):
-            data6 = self.blstm(input6)
+        print(input1, input2, input3, input4, input5, input6)
+        data1 = self.stem(input1, 5)
+        data2 = self.stem(input2, 4)
+        data3 = self.stem(input3, 4)
+        data4 = self.stem(input4, 4)
+        data5 = self.stem(input5, 4)
+        data6 = self.stem(input6, 4)
         print(data1, data2, data3, data4, data5, data6)
-
-        #####################################################################################
-        # stemming
-        with tf.variable_scope('stem1'):
-            data1 = tf.reshape(data1, [-1, 26, 156, 1])
-            data1 = self.stem(data1, 'same')
-        with tf.variable_scope('stem2'):
-            data2 = tf.reshape(data2, [-1, 26, 156, 1])
-            data2 = self.stem(data2, 'same')
-        with tf.variable_scope('stem3'):
-            data3 = tf.reshape(data3, [-1, 26, 156, 1])
-            data3 = self.stem(data3, 'same')
-        with tf.variable_scope('stem4'):
-            data4 = tf.reshape(data4, [-1, 26, 156, 1])
-            data4 = self.stem(data4, 'same')
-        with tf.variable_scope('stem5'):
-            data5 = tf.reshape(data5, [-1, 26, 156, 1])
-            data5 = self.stem(data5, 'same')
-        with tf.variable_scope('stem6'):
-            data6 = tf.reshape(data6, [-1, 26, 156, 1])
-            data6 = self.stem(data6, 'same')
-        print(data1, data2, data3, data4, data5, data6)
-
-        #####################################################################################
-        data = tf.concat([data1, data2, data3, data4, data5, data6], axis=1)
+        data = tf.concat([data1, data2, data3, data4, data5, data6], axis=2)
         data = tf.layers.batch_normalization(data, training=self.isTraining)
-        print(data)
 
-        #####################################################################################
-        data = self.stem(data, 'valid')
-        print(data, '!!!')
-
-        #####################################################################################
         output_inception_a = self.inception_a(data)
-        output_inception_a = self.inception_a(output_inception_a)
         output_reduction_a = self.reduction_a(output_inception_a)
 
         output_inception_b = self.inception_b(output_reduction_a)
-        output_inception_b = self.inception_b(output_inception_b)
-        output_inception_b = self.inception_b(output_inception_b)
         output_reduction_b = self.reduction_b(output_inception_b)
 
         output_inception_c = self.inception_c(output_reduction_b)
-        output_inception_c = self.inception_c(output_inception_c)
-        print(output_reduction_b, output_inception_c, 123123)
-        output = tf.layers.average_pooling2d(inputs=output_inception_c, pool_size=[8, 8], padding="VALID", strides=1)
+        print(output_reduction_b, output_inception_c)
+        output = tf.layers.average_pooling2d(inputs=output_inception_c, pool_size=[2, 2], padding="VALID", strides=1)
+
 
         output = tf.reshape(output, [-1, 100])
 
         fnn_output1 = tf.contrib.layers.fully_connected(output, 70, activation_fn=tf.nn.relu)
-        dropout1 = tf.contrib.layers.dropout(fnn_output1, keep_prob=0.7, is_training=self.isTraining)
+        dropout1 = tf.nn.dropout(fnn_output1, keep_prob=self.dropout_rate)
         fnn_output2 = tf.contrib.layers.fully_connected(dropout1, 40, activation_fn=tf.nn.relu)
-        dropout2 = tf.contrib.layers.dropout(fnn_output2, keep_prob=0.7, is_training=self.isTraining)
+        dropout2 = tf.nn.dropout(fnn_output2, keep_prob=self.dropout_rate)
         fnn_output3 = tf.contrib.layers.fully_connected(dropout2, 15, activation_fn=tf.nn.relu)
-        dropout3 = tf.contrib.layers.dropout(fnn_output3, keep_prob=0.7, is_training=self.isTraining)
+        dropout3 = tf.nn.dropout(fnn_output3, keep_prob=self.dropout_rate)
         fnn_output4 = tf.contrib.layers.fully_connected(dropout3, 9, activation_fn=tf.nn.relu)
-        dropout4 = tf.contrib.layers.dropout(fnn_output4, keep_prob=0.7, is_training=self.isTraining)
-        self.hypothesis = tf.contrib.layers.fully_connected(dropout4, 4, activation_fn=tf.nn.softmax)
+        dropout4 = tf.nn.dropout(fnn_output4, keep_prob=self.dropout_rate)
+        self.hypothesis = tf.contrib.layers.fully_connected(dropout4, 2, activation_fn=tf.nn.softmax)
 
 
-        inter_output = tf.layers.average_pooling2d(inputs=output_reduction_b, pool_size=[8, 8], padding="VALID", strides=1)
+        inter_output = tf.layers.average_pooling2d(inputs=output_reduction_b, pool_size=[2, 2], padding="VALID", strides=1)
         inter_output = tf.reshape(inter_output, [-1, 80])
 
         fop1 = tf.contrib.layers.fully_connected(inter_output, 45, activation_fn=tf.nn.relu)
-        dp1 = tf.contrib.layers.dropout(fop1, keep_prob=0.7, is_training=self.isTraining)
+        dp1 = tf.nn.dropout(fop1, keep_prob=self.dropout_rate)
         fop2 = tf.contrib.layers.fully_connected(dp1, 22, activation_fn=tf.nn.relu)
-        dp2 = tf.contrib.layers.dropout(fop2, keep_prob=0.7, is_training=self.isTraining)
+        dp2 = tf.nn.dropout(fop2, keep_prob=self.dropout_rate)
         fop3 = tf.contrib.layers.fully_connected(dp2, 9, activation_fn=tf.nn.relu)
-        dp3 = tf.contrib.layers.dropout(fop3, keep_prob=0.7, is_training=self.isTraining)
-        self.inter_hypothesis = tf.contrib.layers.fully_connected(dp3, 4, activation_fn=tf.nn.softmax)
+        dp3 = tf.nn.dropout(fop3, keep_prob=self.dropout_rate)
+        self.inter_hypothesis = tf.contrib.layers.fully_connected(dp3, 2, activation_fn=tf.nn.softmax)
 
+        ################################################################### loss/optimize
+        self.cost = 0.8 * tf.reduce_mean(
+            tf.nn.softmax_cross_entropy_with_logits_v2(logits=self.hypothesis, labels=self.target)) \
+                    + 0.2 * tf.reduce_mean(
+            tf.nn.softmax_cross_entropy_with_logits_v2(logits=self.inter_hypothesis, labels=self.target))
 
-    def costCheck(self):
-        self.cost = 0.75*tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits_v2(logits=self.hypothesis, labels=self.target))\
-                    + 0.25*tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits_v2(logits=self.inter_hypothesis, labels=self.target))
+        self.opt = tf.train.AdamOptimizer(learning_rate=self.learningRate).minimize(self.cost)
+
         tf.summary.scalar("loss", self.cost)
 
-    def optimizer(self):
-        self.opt = tf.train.AdamOptimizer(learning_rate=self.learningRate).minimize(self.cost)
-        self.summary1 = tf.summary.merge_all()
-
-    def accuracy(self):
+        ################################################################### accuracy
         self.h_argmax = tf.argmax(self.hypothesis, 1)
         self.t_argmax = tf.argmax(self.target, 1)
 
@@ -312,127 +259,116 @@ class Inception(object):
         self.acc = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
 
         tf.summary.scalar("accuracy", self.acc)
-        self.summary2 = tf.summary.merge_all()
+        self.summary = tf.summary.merge_all()
 
+
+    def get_predict(self):
+        self.isTraining = False
+        pass
+
+    def get_accuracy(self, data):
+        return self.sess.run([self.acc, self.h_argmax, self.t_argmax],
+                             feed_dict={self.input1: data[0], self.input2: data[1],
+                                        self.input3: data[2], self.input4: data[3],
+                                        self.input5: data[4], self.input6: data[5],
+                                        self.target: data[6], self.dropout_rate: 1.0})
+
+    def train(self, data, dropout_rate=0.7):
+        return self.sess.run([self.cost, self.opt], feed_dict={self.input1: data[0], self.input2: data[1],
+                                                               self.input3: data[2], self.input4: data[3],
+                                                               self.input5: data[4], self.input6: data[5],
+                                                               self.target: data[6], self.dropout_rate: dropout_rate})
+
+    def run2(self):
+        self.sess = tf.Session()
+        saver = tf.train.Saver()
+        checkpoint = tf.train.get_checkpoint_state('trainedModel')
+
+        try:
+            saver.restore(self.sess, checkpoint.model_checkpoint_path)
+            print("Successfully loaded:", checkpoint.model_checkpoint_path)
+            training_acc, _, _ = self.get_accuracy(training_data)
+        except:
+            print("Error on loading old network weights")
 
     def run(self):
         model_save_path = os.path.join(self.current_dir, 'trainedModel')
-        fff = open('result.txt', 'a')
-
-        os.environ["CUDA_VISIBLE_DEVICES"] = "3"
-        os.mkdir(os.path.join(self.current_dir, 'tensorboard'))
+        tensorboard_path = os.path.join(self.current_dir, 'tensorboard')
+        os.mkdir(tensorboard_path)
         os.mkdir(model_save_path)
+        data_list = os.listdir(os.path.join(self.current_dir, 'data', 'pklData', 'training'))
 
-        session = tf.Session()
+        # os.environ["CUDA_VISIBLE_DEVICES"] = "2"
+
         saver = tf.train.Saver()
+        self.sess = tf.Session()
+        self.sess.run(tf.global_variables_initializer())
 
-        with session as sess:
-            sess.run(tf.global_variables_initializer())
+        writer = tf.summary.FileWriter(tensorboard_path)
+        writer.add_graph(self.sess.graph)
 
-            writer = tf.summary.FileWriter(os.path.join(self.current_dir, 'tensorboard'))
-            writer.add_graph(sess.graph)
+        for ep in range(self.epoch):
+            training_acc_sum = 0.0
+            for company_index in data_list[:70]:
+                fp = open(os.path.join(self.dataPath, 'training', company_index), 'rb')
+                training_data = [np.array(data) for data in pickle.load(fp)]
+                fp.close()
+                
+                loss, opt = self.train(training_data)
+                training_acc, _, _ = self.get_accuracy(training_data)
 
-            data_list = os.listdir(os.path.join(self.current_dir, 'data', 'pklData', 'training'))
+                training_acc_sum += training_acc
 
-            for ep in range(self.epoch):
-                for i in range(0, (len(data_list) - 1)):
-                    self.isTraining = True
-                    fp = open(os.path.join(self.dataPath, 'training', data_list[i]), 'rb')
-                    data1 = pickle.load(fp)
-                    # s, cma, vma, cwma, vwma, l, t = data1
-                    fp.close()
-
-                    fp = open(os.path.join(self.dataPath, 'training', data_list[i + 1]), 'rb')
-                    data2 = pickle.load(fp)
-                    fp.close()
-
-                    s, cma, vma, cwma, vwma, l, t = [data1[n] + data2[n] for n in range(len(data1))]
-
-                    opt, loss, summary1, summary2, acc = sess.run([self.opt, self.cost, self.summary1, self.summary2, self.acc],
-                                                                  feed_dict={self.input1: np.array(s[:5]), self.input2: np.array(cma[:5]),
-                                                                             self.input3: np.array(vma[:5]), self.input4: np.array(cwma[:5]),
-                                                                             self.input5: np.array(vwma[:5]), self.input6: np.array(l[:5]),
-                                                                             self.target: np.array(t[:5])})
-
-                    writer.add_summary(summary1, ep + 1)
-                    writer.add_summary(summary2, ep + 1)
-
-
-                # # check accuracy
-                self.isTraining = False
-                whatMax = list()
-                total_acc = direction_acc = br_acc = ed_acc = eu_acc = bl_acc = 0.0
-                for i in range(len(data_list)):
-                    fp = open(os.path.join(self.dataPath, 'test', data_list[i]), 'rb')
-                    s, cma, vma, cwma, vwma, l, t = pickle.load(fp)
-                    fp.close()
-
-                    acc, harg, targ = sess.run([self.acc, self.h_argmax, self.t_argmax],
-                                               feed_dict={self.input1: np.array(s), self.input2: np.array(cma),
-                                                          self.input3: np.array(vma), self.input4: np.array(cwma),
-                                                          self.input5: np.array(vwma), self.input6: np.array(l),
-                                                          self.target: np.array(t)})
-
-                    unique, counts = numpy.unique(targ, return_counts=True)
-                    part_size = dict(zip(unique, counts))
-
-                    tempsum = br = ed = eu = bl = 0.0
-                    for j in range(len(harg)):
-                        if (harg[j] < 2 and targ[j] < 2) or (harg[j] >= 2 and targ[j] >= 2):
-                            tempsum += 1
-                        if harg[j] == targ[j]:
-                            if harg[j] == 0:
-                                br += 1
-                            elif harg[j] == 1:
-                                ed += 1
-                            elif harg[j] == 2:
-                                eu += 1
-                            else:
-                                bl += 1
-                    whatMax.append([data_list[i], acc])
-                    total_acc += acc
-                    direction_acc += tempsum / len(harg) # direction accuracy
-                    br_acc += br / part_size[0]   # br accuracy
-                    ed_acc += ed / part_size[1]   # ed accuracy
-                    eu_acc += eu / part_size[2]   # eu accuracy
-                    bl_acc += bl / part_size[3]   # bl accuracy
-                whatMax.sort(key=lambda x: x[1], reverse=True)
-                print(whatMax[:15])
-                total_acc /= len(data_list)
-                direction_acc /= len(data_list)
-                br_acc /= len(data_list)
-                ed_acc /= len(data_list)
-                eu_acc /= len(data_list)
-                bl_acc /= len(data_list)
-
-                if self.past > total_acc:
-                    if self.cnt == 2:
-                        self.cnt = 0
-                        self.learningRate /= 2.
-                        print('learningRate:', self.learningRate)
-                    else:
-                        self.cnt += 1
-                else:
+            training_acc_sum /= len(data_list)
+            if self.past > training_acc_sum:
+                if self.cnt == 3:
                     self.cnt = 0
-                self.past = total_acc
+                    self.learningRate /= 1.5
+                    print('learningRate:', self.learningRate)
+                else:
+                    self.cnt += 1
+            else:
+                self.cnt = 0
+            self.past = training_acc_sum
 
-                if self.best < total_acc:
-                    saver.save(sess, os.path.join(model_save_path, 'model'))
-                    self.direction_best = direction_acc
-                    self.best = total_acc
+            if not (ep + 1) % 5:
+                print(training_acc_sum, loss)
 
-                    self.br = br_acc
-                    self.ed = ed_acc
-                    self.eu = eu_acc
-                    self.bl = bl_acc
+            # writer.add_summary(summary1, ep + 1)
+            # writer.add_summary(summary, ep + 1)
+    
+            ########################################################################################################
+            #  check accuracy
+            test_acc_sum = 0.0
+            for company_index in data_list[70:]:
+                fp = open(os.path.join(self.dataPath, 'training', company_index), 'rb')
+                test_data = [np.array(data) for data in pickle.load(fp)]
+                fp.close()
+
+                test_acc, harg, targ = self.get_accuracy(test_data)
+                test_acc_sum += test_acc
+
+            test_acc_sum /= len(data_list[70:])
+            if self.best < (test_acc_sum*0.6 + training_acc_sum*0.4):
+                saver.save(self.sess, os.path.join(model_save_path, 'model'))
+                self.training_best = training_acc_sum
+                self.test_best = test_acc_sum
+
+                self.best = test_acc_sum * 0.6 + training_acc_sum * 0.4
+
+                test_file = open('/home/algorithm/test/test', 'a')
+                for accuracy_range in [5, 10, 15, 20, 25, 30, 35, 40]:
+                    accuracy_check_list = list()
+                    for accuracy_check in range(accuracy_range, len(harg), accuracy_range):
+                        accuracy_check_list.append(
+                            round(sum([harg[q] == targ[q] for q in range(accuracy_check - accuracy_range, accuracy_check)])
+                            / accuracy_range, 3))
+
+                    test_file.write('{}\n'.format(accuracy_check_list))
+                test_file.close()
+
+            shuffle(data_list)
 
 
-                if (ep+1) % 5 is 0:
-                    print('accuracy(step{}): {} / best: {}'.format(ep + 1, total_acc, self.best))
-                    print('direction accuracy(step{}): {} / best: {}'.format(ep + 1, direction_acc, self.direction_best))
-                    print('br: {} / ed: {} / eu: {} / bl: {}'.format(self.br, self.ed, self.eu, self.bl))
-
-
-        # fff.write('acc: {} / direction_acc: {}\n'.format(self.best, self.direction_best))
-        # fff.write('br: {} / ed: {} / eu: {} / bl: {}\n\n'.format(self.br, self.ed, self.eu, self.bl))
-        fff.close()
+            if (ep+1) % 5 is 0:
+                print('accuracy_best(step{}): {}, {}'.format(ep + 1, self.training_best, self.test_best))

@@ -7,7 +7,7 @@ import numpy as np
 class Preprocessing(object):
     def __init__(self, predictRange=1):
         self.current_dir = os.getcwd()
-        self.predictRange = predictRange*5
+        self.predictRange = predictRange#*5
         self.predictStartPos = 46   # +1
 
         self.dataPath = os.path.join(self.current_dir, 'data', 'rawData')
@@ -142,16 +142,22 @@ class Preprocessing(object):
         rawData = rawData[isTrain]
         data = list()
         print(rawData[self.predictStartPos - 1])
+        print(rawData[self.predictStartPos][0], rawData[-1][0])
         for i in range(self.predictStartPos, len(rawData) - self.predictRange):
             r = self.temp(rawData[i + self.predictRange - 1][4], rawData[i - 1][4])
-            if r < -3.0:
-                data.append([1.0, 0.0, 0.0, 0.0])
-            elif r < 0:
-                data.append([0.0, 1.0, 0.0, 0.0])
-            elif r <= 3.0:
-                data.append([0.0, 0.0, 1.0, 0.0])
+            if r <= 0:
+                data.append([1.0, 0.0])
             else:
-                data.append([0.0, 0.0, 0.0, 1.0])
+                data.append([0.0, 1.0])
+            #
+            # if r <= -3.0:
+            #     data.append([1.0, 0.0, 0.0, 0.0])
+            # elif r <= 0:
+            #     data.append([0.0, 1.0, 0.0, 0.0])
+            # elif r <= 3.0:
+            #     data.append([0.0, 0.0, 1.0, 0.0])
+            # else:
+            #     data.append([0.0, 0.0, 0.0, 1.0])
 
         return data
 
@@ -169,7 +175,7 @@ class Preprocessing(object):
                 t = [float(j) for j in i]
                 temp.append(t)
 
-            trainEnd, testStart = int(len(temp) * 0.7), int(len(temp) * 0.69)
+            trainEnd, testStart = int(len(temp) * 0.7), int(len(temp) * 0.7)-46
             rawData = [temp[testStart:], temp[:trainEnd]]
             print(fileName)
             dir = {True: 'training', False: 'test'}
@@ -189,3 +195,34 @@ class Preprocessing(object):
 
                 fp1.close()
                 fp.close()
+
+    def preprocessing2(self):
+        dataList = os.listdir(self.dataPath)
+
+        for data in dataList:
+            fp = open(os.path.join(self.dataPath, data))
+            fileName = data.split('.')[0]
+
+            csvData = csv.reader(fp)
+            temp = list()
+            for i in csvData:
+                t = [float(j) for j in i]
+                temp.append(t)
+
+            rawData = [temp[:]]
+            print(fileName)
+            # simple, closeMV, volumeMV, closeWMV, volumeWMV, linear, target
+            temp = list()
+            temp.append(self.makeSimpleData(rawData, 0))
+            temp.extend(self.makeMVData(rawData, 0))
+            temp.extend(self.makeWMVData(rawData, 0))
+            temp.append(self.makeLinearData(rawData, 0))
+            temp.append(self.makeTargetData(rawData, 0))
+
+            print(len(temp[0]) == len(temp[1]), len(temp[1]) == len(temp[2]), len(temp[2]) == len(temp[3]),
+                  len(temp[3]) == len(temp[4]), len(temp[4]) == len(temp[5]), len(temp[5]))
+            fp1 = open(os.path.join(self.savePath, 'training', '{}.pkl').format(fileName), 'wb')
+            pickle.dump(temp, fp1)
+
+            fp1.close()
+            fp.close()

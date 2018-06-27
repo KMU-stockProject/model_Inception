@@ -19,7 +19,9 @@ if __name__ == '__main__':
     # pre = Preprocessing()
     # pre.selectData()
     # pre.preprocessing()
-    arg = sys.argv
+    # arg = sys.argv
+
+    # learning = Inception(arg[1])
     learning = Inception()
     print('okok')
     learning.run()
